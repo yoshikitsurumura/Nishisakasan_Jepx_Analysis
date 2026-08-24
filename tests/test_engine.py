@@ -52,6 +52,25 @@ def test_incomplete_days_are_skipped_not_guessed_at(price_frame):
     assert [date for date, _ in result.skipped_days] == [dt.date(2025, 4, 2)]
 
 
+@pytest.mark.parametrize("horizon", ["day", "continuous"])
+def test_duplicate_slot_does_not_disguise_an_incomplete_day(price_frame, horizon):
+    malformed = price_frame.copy()
+    target = malformed["delivery_date"] == dt.date(2025, 4, 2)
+    last_slot = malformed.index[target & (malformed["slot"] == 48)][0]
+    malformed.loc[last_slot, "slot"] = 47
+
+    result = run_backtest(malformed, config(horizon=horizon))
+
+    assert result.days == 2
+    assert result.skipped_days == [
+        (
+            dt.date(2025, 4, 2),
+            "expected slots 1..48 exactly once with finite prices; "
+            "found 48 rows and 47 unique slots",
+        )
+    ]
+
+
 def test_no_export_battery_demands_a_load_profile():
     with pytest.raises(ValueError, match="capped by site load"):
         config(spec=BatterySpec(name="t", capacity_kwh=10.0, power_kw=5.0, allow_export=False))
