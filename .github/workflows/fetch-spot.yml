@@ -1,0 +1,68 @@
+# Daily ingestion of JEPX spot prices.
+#
+# Once a day is the right cadence and more is pointless: spot bidding closes
+# at 10:00 JST and the 48 settled slots for the next delivery day are
+# published around 13:00 JST.  This runs at 14:00 JST, an hour after, and
+# re-downloads the whole year file so that days JEPX has since corrected are
+# picked up too.
+#
+# Committing the Parquet back to the repo is deliberate -- it gives the data
+# a diffable history, so a republished day shows up as a reviewable change
+# rather than silently replacing what the backtests were built on.
+name: fetch-spot
+
+on:
+  schedule:
+    - cron: "0 5 * * *"   # 05:00 UTC = 14:00 JST
+  workflow_dispatch:
+    inputs:
+      years:
+        description: "Space-separated file years to fetch (default: this year and last)"
+        required: false
+        type: string
+
+concurrency:
+  group: fetch-spot
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: pip install -e .
+
+      - name: Fetch spot prices
+        run: |
+          if [ -n "${{ inputs.years }}" ]; then
+            jepx-arb fetch --year ${{ inputs.years }}
+          else
+            jepx-arb fetch
+          fi
+
+      - name: Commit any change
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- data/; then
+            echo "No new or revised slots today."
+            exit 0
+          fi
+          git add data/
+          git commit -m "data: JEPX spot prices as of $(date -u +%Y-%m-%d)"
+          # Another run may have landed while this one was working.
+          for attempt in 1 2 3 4; do
+            git pull --rebase origin "${GITHUB_REF_NAME}" && git push && exit 0
+            sleep $((2 ** attempt))
+          done
+          echo "::error::could not push the updated data after 4 attempts"
+          exit 1

@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+.ipynb_checkpoints/
+
+# Raw downloads are reproducible; only the normalised Parquet is tracked.
+data/raw/
+out/
