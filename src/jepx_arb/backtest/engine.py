@@ -171,7 +171,7 @@ def _run_daily(frame: pd.DataFrame, config: BacktestConfig) -> BacktestResult:
     for date, day in frame.groupby("delivery_date", sort=True):
         market = _day_prices(day)
         if market is None:
-            skipped.append((date, f"expected {SLOTS_PER_DAY} slots, found {len(day)}"))
+            skipped.append((date, _invalid_day_reason(day)))
             continue
 
         buy, sell = config.tariff.prices(market, hours)
@@ -199,8 +199,8 @@ def _run_continuous(frame: pd.DataFrame, config: BacktestConfig) -> BacktestResu
     complete: list[pd.DataFrame] = []
     skipped: list[tuple[dt.date, str]] = []
     for date, day in frame.groupby("delivery_date", sort=True):
-        if len(day) != SLOTS_PER_DAY or day["price_jpy_kwh"].isna().any():
-            skipped.append((date, f"expected {SLOTS_PER_DAY} slots, found {len(day)}"))
+        if _day_prices(day) is None:
+            skipped.append((date, _invalid_day_reason(day)))
             continue
         complete.append(day.sort_values("slot"))
     if not complete:
@@ -275,10 +275,22 @@ def _day_prices(day: pd.DataFrame) -> np.ndarray | None:
     """Prices as a dense 48-vector, or None if the day is incomplete."""
     if len(day) != SLOTS_PER_DAY:
         return None
+    slots = pd.to_numeric(day["slot"], errors="coerce").sort_values().to_numpy()
+    if not np.array_equal(slots, np.arange(1, SLOTS_PER_DAY + 1)):
+        return None
     ordered = day.sort_values("slot")["price_jpy_kwh"].to_numpy(dtype=float)
-    if np.isnan(ordered).any():
+    if not np.isfinite(ordered).all():
         return None
     return ordered
+
+
+def _invalid_day_reason(day: pd.DataFrame) -> str:
+    """Describe invalid input without implying that row count alone is sufficient."""
+    unique_slots = day["slot"].nunique(dropna=True)
+    return (
+        f"expected slots 1..{SLOTS_PER_DAY} exactly once with finite prices; "
+        f"found {len(day)} rows and {unique_slots} unique slots"
+    )
 
 
 def _discharge_cap(config: BacktestConfig, date: dt.date) -> np.ndarray | None:
